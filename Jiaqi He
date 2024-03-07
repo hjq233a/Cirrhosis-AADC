@@ -1,0 +1,94 @@
+#download data#
+#First, u need to require an Accession list(from website)
+#copy all the words into 'res.txt'
+vi res.txt
+cat res.txt | while read i; do echo "aws s3 cp --no-sign-request s3://sra-pub-run-odp/sra/${i}/${i} ${i}.sra" ; done; > download.sh
+sh download.sh
+#if u r proficient with the above procedure, try the following one directly
+cat res.txt | while read i; do aws s3 cp --no-sign-request s3://sra-pub-run-odp/sra/${i}/${i} ${i}.sra ; done;
+#if u wanna download the specific one, the format below is recommended
+aws s3 cp --no-sign-request s3://sra-pub-run-odp/sra/SRR22802071/SRR22802071 ./SRR22802071.sra
+#
+export PATH="/data3/Group5/hejiaqi/mambaforge/bin:$PATH"
+#
+mamba activate humann3
+#
+ls -1 *.sra | while read i;do  fasterq-dump ${i} -e 12 --split-files ;done;
+#
+time pigz -p 24 *.fastq
+time ls *.fastq | parallel -j 24 pigz -p 24 {}
+#
+mamba deactivate
+#
+export PATH="/home/tangwenli/miniconda3/bin:$PATH"
+#
+source activate humann2
+#
+time parallel -j 2 --link 'kneaddata -i1 {1} -i2 {2} -o /your/output/file/path -db /tools/db/metagenome/KneadData_db/Homo_sapiens_hg37_and_human_contamination_Bowtie2_v0.1 --threads 30 --max-memory 61140m --trimmomatic /data3/Group5/hejiaqi/reference/Trimmomatic-0.39 --trimmomatic-options "SLIDINGWINDOW:5:20 MINLEN:36 LEADING:3 TRAILING:3 ILLUMINACLIP:/TruSeq3-PE.fa:2:30:10" --remove-intermediate-output --run-fastqc-end' ::: *_1.fastq.gz ::: *_2.fastq.gz
+#
+# Quit and reset your path #
+#
+export PATH="/data3/Group5/hejiaqi/mambaforge/bin:$PATH"
+#
+mamba activate humann3
+#
+pigz -p 24 *paired_*.fastq
+ls *paired_*.fastq | parallel -j 24 pigz -p 24 {}
+#
+ls -1 *.fastq.gz | head -n 430 | xargs -I{} mv {} Group3/
+#
+time parallel -j 2 'humann --input {1} -o /your/output/file/path --threads 15 --remove-temp-output' ::: *kneaddata_paired_*.fastq.gz  
+##########################################################################
+#    It is recommended to submit your task with the next two orders      #
+##########################################################################
+#-------------------------#
+#          qsub           #
+#-------------------------#
+vi humann6.sh
+#!/bin/bash
+#PBS -N humann6
+#PBS -l nodes=icloud-lnode05:ppn=8
+#PBS -l walltime=1:00:00
+#PBS -o /data3/Group5/hejiaqi/LD847/match/paired/Group6/test.out
+#PBS -e /data3/Group5/hejiaqi/LD847/match/paired/Group6/test.err
+#PBS -r s  
+#PBS -W checkpoint=resume  
+export PATH="/data3/Group5/hejiaqi/mambaforge/bin:$PATH"
+source activate humann3
+cd /data3/Group5/hejiaqi/LD847/match/paired/Group6/
+time parallel -j 2 'humann --input {1} -o /data3/Group5/hejiaqi/LD847/match/paired/Group6/output6 --threads 15 --remove-temp-output' ::: *kneaddata_paired_*.fastq.gz
+
+qsub test.sh
+qsub -N test.sh -l nodes=2:ppn=8 -l walltime=1:00:00 -f test.sh
+qsub -clear -cwd -q all.q@icloud-lnode02.local -binding linear:8 -l vf=32G,num_proc=8 test.sh &
+qsub -l time=01:00:00 -clear -cwd -q all.q@icloud-lnode06.local -binding linear:8 -l vf=32G,num_proc=8 humann6.sh &
+
+qstat -f
+qstat -u user_name
+ls -l | grep "^d" | wc -l
+#----------------------------#
+#             slurm          #
+#----------------------------#
+vi test2.slurm.sh
+#!/bin/bash
+#SBATCH --job-name=test1
+#SBATCH --nodelist=icloud-lnode01
+#SBATCH --ntasks=2
+#SBATCH --cpus-per-task=4  
+#SBATCH --time=1:00:00
+#SBATCH --output=/data3/Group5/hejiaqi/LD847/match/paired/test2/output/test1.out
+#SBATCH --error=/data3/Group5/hejiaqi/LD847/match/paired/test2/output/test1.err
+
+export PATH="/data3/Group5/hejiaqi/mambaforge/bin:$PATH"
+source activate humann3
+
+cd /data3/Group5/hejiaqi/LD847/match/paired/test2
+time parallel -j 2 'humann --input {1} -o /data3/Group5/hejiaqi/LD847/match/paired/test2/output --threads 15 --remove-temp-output' ::: *kneaddata_paired_*.fastq.gz
+
+sbatch test2.slurm.sh
+###########################################
+humann_join_tables --input . --output humann_genefamilies.tsv --file_name genefamilies.tsv
+#
+humann_join_tables --input . --output humann_pathcoverage.tsv --file_name pathcoverage.tsv
+#
+humann_join_tables --input . --output humann_pathabundance.tsv --file_name pathabundance.tsv
